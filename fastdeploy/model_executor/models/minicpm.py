@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import re
+import math
 
 import paddle
 from paddle import nn
@@ -102,16 +103,15 @@ class MiniCPMAttention(nn.Layer):
     def __init__(self, fd_config: FDConfig, layer_id: int, prefix: str = "") -> None:
         super().__init__()
 
-        self.qkv_proj = QKVParallelLinear(fd_config=fd_config, prefix=f"{prefix}.qkv_proj", with_bias=True)
+        self.qkv_proj = QKVParallelLinear(fd_config=fd_config, prefix=f"{prefix}.qkv_proj", with_bias=False)
 
         self.o_proj = RowParallelLinear(
             fd_config=fd_config,
             prefix=f"{prefix}.o_proj",
             input_size=fd_config.model_config.hidden_size,
             output_size=fd_config.model_config.hidden_size,
-            with_bias=True,  # Depending on config, this might be true or false. MiniCPM usually follows LLaMA but we set it up to accept biases if present. Default LLaMA is False, but we pass with_bias config dynamically if needed, here we default to False just in case, but let's check HF config. We can leave it as False, Qwen2 uses false? Wait, Qwen2 uses with_bias=True for QKV and False for O.
+            with_bias=False,
         )
-        self.o_proj.with_bias = getattr(fd_config.model_config, "attention_bias", False)
 
         self.attn = Attention(
             fd_config=fd_config,
@@ -153,6 +153,11 @@ class MiniCPMDecoderLayer(nn.Layer):
         super().__init__()
         layer_id = int(prefix.split(sep=".")[-1])
         self.hidden_size = fd_config.model_config.hidden_size
+        
+        # MiniCPM Scaling
+        self.scale_depth = getattr(fd_config.model_config, "scale_depth", 1.4)
+        self.num_hidden_layers = fd_config.model_config.num_hidden_layers
+        self.residual_scale = self.scale_depth / math.sqrt(self.num_hidden_layers)
 
         self.input_layernorm = RMSNorm(
             fd_config,
@@ -184,18 +189,29 @@ class MiniCPMDecoderLayer(nn.Layer):
         hidden_states: paddle.Tensor,
         residual: paddle.Tensor = None,
     ):
+        # 1. Norm and add previous residual
+        # Note: RMSNorm(hidden, residual) does: new_res = residual + hidden; normed = norm(new_res)
         hidden_states, residual = self.input_layernorm(
             hidden_states, residual_input=residual, forward_meta=forward_meta
         )
 
-        hidden_states = self.self_attn(
+        # 2. Attention with residual scaling
+        attn_out = self.self_attn(
             hidden_states=hidden_states,
             forward_meta=forward_meta,
         )
+        
+        # Scale attention output before adding to residual in next norm
+        attn_out = attn_out * self.residual_scale
 
-        hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+        # 3. Post-attention norm and residual addition
+        hidden_states, residual = self.post_attention_layernorm(attn_out, residual)
 
-        hidden_states = self.mlp(hidden_states, forward_meta)
+        # 4. MLP with residual scaling
+        mlp_out = self.mlp(hidden_states, forward_meta)
+        
+        # Scale MLP output
+        hidden_states = mlp_out * self.residual_scale
 
         return hidden_states, residual
 
@@ -212,6 +228,7 @@ class MiniCPMModel(nn.Layer):
         super().__init__()
 
         self.num_layers = fd_config.model_config.num_hidden_layers
+        self.scale_emb = getattr(fd_config.model_config, "scale_emb", 1.0)
         fd_config.model_config.pretrained_config.prefix_name = "model"
 
         self.embed_tokens = VocabParallelEmbedding(
@@ -254,6 +271,10 @@ class MiniCPMModel(nn.Layer):
     ):
         """ """
         hidden_states = self.embed_tokens(ids_remove_padding=ids_remove_padding, forward_meta=forward_meta)
+        
+        # MiniCPM Embedding Scaling
+        if self.scale_emb != 1.0:
+            hidden_states = hidden_states * self.scale_emb
 
         residual = None
 
@@ -266,7 +287,25 @@ class MiniCPMModel(nn.Layer):
 
 
 @ModelRegistry.register_model_class(
-    architecture=["MiniCPMForCausalLM", "MiniCPM3ForCausalLM", "MiniCPM4ForCausalLM", "MiniCPM"],
+    architecture="MiniCPMForCausalLM",
+    module_name="minicpm",
+    category=[ModelCategory.TEXT_GENERATION, ModelCategory.EMBEDDING],
+    primary_use=ModelCategory.TEXT_GENERATION,
+)
+@ModelRegistry.register_model_class(
+    architecture="MiniCPM4ForCausalLM",
+    module_name="minicpm",
+    category=[ModelCategory.TEXT_GENERATION, ModelCategory.EMBEDDING],
+    primary_use=ModelCategory.TEXT_GENERATION,
+)
+@ModelRegistry.register_model_class(
+    architecture="MiniCPM3ForCausalLM",
+    module_name="minicpm",
+    category=[ModelCategory.TEXT_GENERATION, ModelCategory.EMBEDDING],
+    primary_use=ModelCategory.TEXT_GENERATION,
+)
+@ModelRegistry.register_model_class(
+    architecture="MiniCPM",
     module_name="minicpm",
     category=[ModelCategory.TEXT_GENERATION, ModelCategory.EMBEDDING],
     primary_use=ModelCategory.TEXT_GENERATION,
@@ -373,7 +412,18 @@ class MiniCPMForCausalLM(ModelForCasualLM):
         """ """
         logits = self.lm_head(hidden_states)
         logits = logits.astype(paddle.float32)
-        logits[:, self.ori_vocab_size :] = -float("inf")
+        
+        # MiniCPM Logits Scaling
+        if hasattr(self.fd_config.model_config, "dim_model_base") and self.fd_config.model_config.dim_model_base is not None:
+            scale = self.fd_config.model_config.hidden_size / self.fd_config.model_config.dim_model_base
+            logits = logits / scale
+        
+        # 使用 ori_vocab_size 限制 logits 范围，确保只输出有效 token
+        if hasattr(self, 'ori_vocab_size') and self.ori_vocab_size is not None:
+            print(f"[DEBUG] compute_logits: logits shape={logits.shape}, ori_vocab_size={self.ori_vocab_size}")
+            logits[:, self.ori_vocab_size :] = -float("inf")
+        else:
+            print(f"[DEBUG] compute_logits: logits shape={logits.shape}, no ori_vocab_size set")
 
         return logits
 

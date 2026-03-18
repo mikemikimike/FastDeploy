@@ -275,9 +275,9 @@ class VocabParallelEmbedding(nn.Layer):
             start_idx = start_idx // packed_factor
             shard_size = shard_size // packed_factor
         else:
-            assert loaded_weight.shape[output_dim] == self.org_vocab_size, (
+            assert loaded_weight.shape[output_dim] == self.num_embeddings, (
                 f"Loaded weight dim {output_dim} size {loaded_weight.shape[output_dim]} "
-                f"!= org_vocab_size {self.org_vocab_size}"
+                f"!= num_embeddings {self.num_embeddings}"
             )
 
         shard_weight = slice_fn(loaded_weight, output_dim, start_idx, end_idx)
