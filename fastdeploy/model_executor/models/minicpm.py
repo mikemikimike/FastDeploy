@@ -373,7 +373,12 @@ class MiniCPMForCausalLM(ModelForCasualLM):
         """ """
         logits = self.lm_head(hidden_states)
         logits = logits.astype(paddle.float32)
-        logits[:, self.ori_vocab_size :] = -float("inf")
+        # 使用 ori_vocab_size 限制 logits 范围，确保只输出有效 token
+        if hasattr(self, 'ori_vocab_size') and self.ori_vocab_size is not None:
+            print(f"[DEBUG] compute_logits: logits shape={logits.shape}, ori_vocab_size={self.ori_vocab_size}")
+            logits[:, self.ori_vocab_size :] = -float("inf")
+        else:
+            print(f"[DEBUG] compute_logits: logits shape={logits.shape}, no ori_vocab_size set")
 
         return logits
 
