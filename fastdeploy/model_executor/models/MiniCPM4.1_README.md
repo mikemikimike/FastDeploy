@@ -30,16 +30,17 @@ pip install -r requirements.txt
 您可以直接使用 FastDeploy 的内置加载器加载模型：
 
 ```python
-from fastdeploy import FastDeployPipeline
+from fastdeploy import LLM, SamplingParams
 
 model_path = "/path/to/MiniCPM4.1-8B"
-pipeline = FastDeployPipeline(model_dir=model_path)
+llm = LLM(model=model_path, tensor_parallel_size=1, max_model_len=8192)
 
 prompts = ["介绍一下量子力学？", "如何使用Python编写爬虫？"]
-responses = pipeline.generate(prompts, max_length=512)
+sampling_params = SamplingParams(max_tokens=512)
+outputs = llm.generate(prompts, sampling_params)
 
-for p, r in zip(prompts, responses):
-    print(f"Prompt: {p}\nResponse: {r}\n")
+for output in outputs:
+    print(f"Prompt: {output.prompt}\nResponse: {output.outputs.text}\n")
 ```
 
 ### 3.2 低 bit 量化推理 (W8A8 / W4A16 / GPTQ / AWQ)
@@ -50,23 +51,22 @@ for p, r in zip(prompts, responses):
 
 **W8A8 PTQ 启动示例:**
 ```python
-from fastdeploy import FastDeployPipeline, FDConfig
+from fastdeploy import LLM, SamplingParams
 
-# 启用 W8A8 动态或静态量化
-fd_config = FDConfig()
-fd_config.quant_config = {
-    "quant_method": "w8a8",
-    "weight_bits": 8,
-    "activation_bits": 8
-}
-
-pipeline = FastDeployPipeline(
-    model_dir="/path/to/MiniCPM4.1-8B",
-    fd_config=fd_config
+# 假设您加载的是经过 W8A8 量化的权重目录，或者是需要在加载时配置量化参数
+# FastDeploy 的 LLM 接口会自动读取模型目录中的 config.json（如 quant_method="w8a8"）
+llm = LLM(
+    model="/path/to/MiniCPM4.1-8B",
+    tensor_parallel_size=1,
+    max_model_len=8192,
+    quantization="w8a8" # 或者 "gptq", "awq"
 )
 
-response = pipeline.generate("What is FastDeploy?", max_length=256)
-print(response)
+sampling_params = SamplingParams(max_tokens=256)
+outputs = llm.generate(["What is FastDeploy?"], sampling_params)
+
+for output in outputs:
+    print(output.outputs.text)
 ```
 
 对于 AWQ 和 GPTQ，同样直接将 `model_dir` 指向您经过 AWQ/GPTQ 转换的本地目录，FastDeploy 的 `minicpm.py` 实现会自动识别并解析量化层。
