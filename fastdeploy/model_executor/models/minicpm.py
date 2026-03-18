@@ -266,7 +266,7 @@ class MiniCPMModel(nn.Layer):
 
 
 @ModelRegistry.register_model_class(
-    architecture=["MiniCPMForCausalLM", "MiniCPM3ForCausalLM", "MiniCPM"],
+    architecture=["MiniCPMForCausalLM", "MiniCPM3ForCausalLM", "MiniCPM4ForCausalLM", "MiniCPM"],
     module_name="minicpm",
     category=[ModelCategory.TEXT_GENERATION, ModelCategory.EMBEDDING],
     primary_use=ModelCategory.TEXT_GENERATION,
@@ -392,6 +392,7 @@ class MiniCPMForCausalLM(ModelForCasualLM):
         self.model.clear_grpah_opt_backend(fd_config=self.fd_config)
 
 
+@ModelRegistry.register_pretrained_model
 class MiniCPMPretrainedModel(PretrainedModel):
     """
     MiniCPMPretrainedModel
