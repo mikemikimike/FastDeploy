@@ -281,7 +281,7 @@ class ModelRegistry:
         cls,
         model_class=None,
         *,
-        architecture: str = None,
+        architecture: Union[str, List[str]] = None,
         module_name: str = None,
         module_path: str = "fastdeploy.model_executor.models",
         category: Union[ModelCategory, List[ModelCategory]] = ModelCategory.TEXT_GENERATION,
@@ -296,7 +296,7 @@ class ModelRegistry:
 
         Args:
             model_class: The model class (when used as simple decorator)
-            architecture (str): Unique identifier for the model architecture
+            architecture (str or list[str]): Unique identifier(s) for the model architecture
             module_name (str): Relative path to the module containing the model
             module_path (str): Absolute path to the module containing the model
             category: Model category or list of categories
@@ -311,28 +311,31 @@ class ModelRegistry:
             if architecture and module_name:
                 categories = category if isinstance(category, list) else [category]
 
-                # Register main entry
-                arch_key = architecture
-                cls._enhanced_models[arch_key] = {
-                    "class_name": model_cls.__name__,
-                    "module_name": module_name,
-                    "module_path": module_path,
-                    "category": primary_use or categories[0],
-                    "class": model_cls,
-                }
+                # Handle architecture as list or string
+                arch_list = architecture if isinstance(architecture, list) else [architecture]
 
-                # Register category-specific entries for multi-category models
-                if len(categories) > 1:
-                    for cat in categories:
-                        key = f"{arch_key}_{cat.value}"
-                        cls._enhanced_models[key] = {
-                            "class_name": model_cls.__name__,
-                            "module_name": module_name,
-                            "module_path": module_path,
-                            "category": cat,
-                            "primary_use": primary_use or categories[0],
-                            "class": model_cls,
-                        }
+                # Register each architecture in the list
+                for arch_key in arch_list:
+                    cls._enhanced_models[arch_key] = {
+                        "class_name": model_cls.__name__,
+                        "module_name": module_name,
+                        "module_path": module_path,
+                        "category": primary_use or categories[0],
+                        "class": model_cls,
+                    }
+
+                    # Register category-specific entries for multi-category models
+                    if len(categories) > 1:
+                        for cat in categories:
+                            key = f"{arch_key}_{cat.value}"
+                            cls._enhanced_models[key] = {
+                                "class_name": model_cls.__name__,
+                                "module_name": module_name,
+                                "module_path": module_path,
+                                "category": cat,
+                                "primary_use": primary_use or categories[0],
+                                "class": model_cls,
+                            }
             return model_cls
 
         if model_class is not None:
